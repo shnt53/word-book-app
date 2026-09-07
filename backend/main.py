@@ -16,11 +16,14 @@ from sqlalchemy.orm import Session, relationship, sessionmaker
 # ------------------------------------------------------------------------------
 # 1. データベース設定 & モデル定義
 # ------------------------------------------------------------------------------
-# 本番環境では環境変数などから取得します（例: SupabaseやNeonのPostgreSQL URL）
-DATABASE_URL = os.getenv("postgresql://postgres:[GsTwFKmNkRpUUPuj]@db.gmdtbqlsdpbedgcjelya.supabase.co:5432/postgres", "sqlite:///./wordbook.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./wordbook.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+
+engine = create_engine(
+    DATABASE_URL, 
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -63,6 +66,11 @@ class WordUpsert(BaseModel):
     word_id: Optional[str] = None
 
 
+class WordUpdate(BaseModel):
+    term: str
+    definition: str
+    status: Optional[str] = None
+
 # ------------------------------------------------------------------------------
 # 3. FastAPI アプリケーション設定
 # ------------------------------------------------------------------------------
@@ -104,6 +112,17 @@ def create_deck(deck_in: DeckCreate, db: Session = Depends(get_db)):
     return deck
 
 
+@app.delete("/decks/{deck_id}")
+def delete_deck(deck_id: str, db: Session = Depends(get_db)):
+    deck = db.query(Deck).filter(Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="単語帳が見つかりません")
+
+    db.delete(deck)
+    db.commit()
+    return {"message": "単語帳を削除しました"}
+
+
 # --- ② 管理画面用 ---
 @app.get("/decks/{deck_id}")
 def get_deck_detail(deck_id: str, db: Session = Depends(get_db)):
@@ -112,17 +131,35 @@ def get_deck_detail(deck_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="単語帳が見つかりません")
     words = db.query(Word).filter(Word.deck_id == deck_id).order_by(Word.created_at.desc()).all()
     return {
-        "deck": {"id": deck.id, "title": deck.title, "description": deck.description},
+        "id": deck.id,
+        "title": deck.title,
+        "description": deck.description,
         "words": [
             {
                 "id": w.id,
                 "term": w.term,
                 "definition": w.definition,
-                "is_wrong": w.is_wrong,
+                "status": "not_remembered" if w.is_wrong else "remembered",
             }
             for w in words
         ],
     }
+
+
+@app.put("/words/{word_id}")
+def update_word(word_id: str, payload: WordUpdate, db: Session = Depends(get_db)):
+    word = db.query(Word).filter(Word.id == word_id).first()
+    if not word:
+        raise HTTPException(status_code=404, detail="更新対象の単語が見つかりません")
+    
+    word.term = payload.term
+    word.definition = payload.definition
+    if payload.status is not None:
+        word.is_wrong = (payload.status != "remembered")
+        
+    db.commit()
+    db.refresh(word)
+    return {"id": word.id, "term": word.term, "definition": word.definition}
 
 
 @app.delete("/words/{word_id}")
@@ -135,7 +172,7 @@ def delete_word(word_id: str, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 
-# --- ③ 追加・更新画面用 ---
+# --- ③ 追加・CSVインポート ---
 @app.post("/decks/{deck_id}/words")
 def upsert_word(deck_id: str, payload: WordUpsert, db: Session = Depends(get_db)):
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
@@ -166,8 +203,6 @@ async def import_csv(deck_id: str, file: UploadFile = File(...), db: Session = D
         contents = await file.read()
         decoded = contents.decode("utf-8-sig")
         csv_reader = csv.reader(StringIO(decoded))
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="文字コードエラーです。UTF-8形式のCSVを使用してください。")
     except Exception:
         raise HTTPException(status_code=400, detail="ファイルの読み込みに失敗しました")
 
@@ -195,56 +230,48 @@ async def import_csv(deck_id: str, file: UploadFile = File(...), db: Session = D
     return {"message": f"{len(new_words)}件の単語をインポートしました"}
 
 
-# --- ④ クイズ画面用 ---
+# --- ④ クイズ機能（複数問のリストを返却） ---
 @app.get("/decks/{deck_id}/quiz")
-def get_quiz_question(deck_id: str, only_wrong: bool = False, db: Session = Depends(get_db)):
+def get_quiz_questions(deck_id: str, only_wrong: bool = False, db: Session = Depends(get_db)):
     all_words = db.query(Word).filter(Word.deck_id == deck_id).all()
 
-    if len(all_words) < 4:
-        raise HTTPException(status_code=400, detail="クイズを行うには単語帳に最低4つの単語が必要です")
+    if len(all_words) < 2:
+        raise HTTPException(status_code=400, detail="クイズを行うには単語帳に最低2つの単語が必要です")
 
-    if only_wrong:
-        target_candidates = [w for w in all_words if w.is_wrong]
-        if not target_candidates:
-            raise HTTPException(status_code=404, detail="間違えた単語がありません")
-    else:
-        target_candidates = all_words
+    target_words = [w for w in all_words if w.is_wrong] if only_wrong else all_words
+    if not target_words:
+        target_words = all_words
 
-    target = random.choice(target_candidates)
+    quiz_list = []
+    for target in target_words:
+        other_words = [w for w in all_words if w.id != target.id]
+        dummy_count = min(3, len(other_words))
+        dummies = random.sample(other_words, dummy_count)
 
-    other_words = [w for w in all_words if w.id != target.id]
-    dummies = random.sample(other_words, 3)
+        options = [target.term] + [d.term for d in dummies]
+        random.shuffle(options)
 
-    options = [target.term] + [d.term for d in dummies]
-    random.shuffle(options)
+        quiz_list.append({
+            "id": target.id,
+            "definition": target.definition,
+            "correct_term": target.term,
+            "options": options,
+        })
 
-    return {
-        "word_id": target.id,
-        "definition": target.definition,
-        "correct_term": target.term,
-        "options": options,
-    }
+    random.shuffle(quiz_list)
+    return quiz_list
 
 
 @app.patch("/words/{word_id}/status")
-def update_word_status(word_id: str, is_wrong: bool, db: Session = Depends(get_db)):
+def update_word_status(word_id: str, status: Optional[str] = None, is_wrong: Optional[bool] = None, db: Session = Depends(get_db)):
     word = db.query(Word).filter(Word.id == word_id).first()
     if not word:
         raise HTTPException(status_code=404, detail="指定された単語が見つかりません")
 
-    word.is_wrong = is_wrong
+    if status is not None:
+        word.is_wrong = (status != "remembered")
+    elif is_wrong is not None:
+        word.is_wrong = is_wrong
+
     db.commit()
     return {"status": "success"}
-
-@app.delete("/decks/{deck_id}")
-def delete_deck(deck_id: str, db: Session = Depends(get_db)):
-    deck = db.query(Deck).filter(Deck.id == deck_id).first()
-    if not deck:
-        raise HTTPException(status_code=404, detail="単語帳が見つかりません")
-
-    db.query(Word).filter(Word.deck_id == deck_id).delete()
-
-    db.delete(deck)
-    db.commit()
-
-    return {"message": "単語帳を削除しました"}
