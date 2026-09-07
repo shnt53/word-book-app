@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, use } from 'react';
+import { useState, useEffect, use, useRef } from 'react';
 import Link from 'next/link';
 
 type Word = {
@@ -31,6 +31,8 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
   // CSVインポートモーダル用の状態
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
   const [csvText, setCsvText] = useState('');
+  const [fileName, setFileName] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
@@ -104,7 +106,25 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
     }
   };
 
-  // CSVインポート送信処理（カンマまたはタブ区切りのテキストを一括登録）
+  // CSVファイルの読み込み処理
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setFileName(file.name);
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content) {
+        setCsvText(content);
+      }
+    };
+
+    reader.readAsText(file, 'UTF-8');
+  };
+
+  // CSVインポート送信処理
   const handleImportCsv = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!csvText.trim()) return;
@@ -114,11 +134,10 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
 
     for (const line of lines) {
       if (!line.trim()) continue;
-      // カンマまたはタブで分割
       const parts = line.includes('\t') ? line.split('\t') : line.split(',');
       if (parts.length >= 2) {
         const termVal = parts[0].trim();
-        const defVal = parts.slice(1).join(',').trim(); // 定義にカンマが含まれる場合に対応
+        const defVal = parts.slice(1).join(',').trim();
 
         if (termVal && defVal) {
           try {
@@ -137,6 +156,7 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
 
     alert(`${successCount} 件の単語をインポートしました`);
     setCsvText('');
+    setFileName('');
     setIsCsvModalOpen(false);
     fetchDeck();
   };
@@ -167,7 +187,11 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
             </Link>
           )}
           <button
-            onClick={() => setIsCsvModalOpen(true)}
+            onClick={() => {
+              setCsvText('');
+              setFileName('');
+              setIsCsvModalOpen(true);
+            }}
             className="bg-gray-100 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-200 transition font-medium"
           >
             CSVインポート
@@ -284,24 +308,47 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
         </div>
       )}
 
-      {/* CSV/テキスト一括インポートモーダル */}
+      {/* CSVファイル直接指定インポートモーダル */}
       {isCsvModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-lg w-full p-6 text-gray-900">
-            <h2 className="text-xl font-bold mb-2 text-gray-900">CSVから一括インポート</h2>
+            <h2 className="text-xl font-bold mb-2 text-gray-900">CSVファイルを読み込む</h2>
             <p className="text-xs text-gray-600 mb-4">
-              「単語,定義」または「単語 [タブ] 定義」の形式で1行ずつ入力または貼り付けしてください。
+              「単語,定義」形式で作成された `.csv` ファイルを選択してください。
             </p>
             <form onSubmit={handleImportCsv} className="space-y-4">
               <div>
-                <textarea
-                  required
-                  value={csvText}
-                  onChange={(e) => setCsvText(e.target.value)}
-                  className="w-full border rounded-md p-2 h-48 font-mono text-sm text-gray-900 bg-white border-gray-300"
-                  placeholder={`apple,りんご\nbanana,バナナ\norange,みかん`}
+                <input
+                  type="file"
+                  accept=".csv, .txt"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  className="hidden"
                 />
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition"
+                >
+                  <p className="text-sm font-medium text-gray-700">
+                    {fileName ? `選択済み: ${fileName}` : 'クリックしてCSVファイルを選択'}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">.csv または .txt ファイル</p>
+                </div>
               </div>
+
+              {csvText && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    読み込みプレビュー (編集可):
+                  </label>
+                  <textarea
+                    value={csvText}
+                    onChange={(e) => setCsvText(e.target.value)}
+                    className="w-full border rounded-md p-2 h-36 font-mono text-xs text-gray-900 bg-gray-50 border-gray-300"
+                  />
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -312,7 +359,8 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium"
+                  disabled={!csvText.trim()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
                   インポート実行
                 </button>
