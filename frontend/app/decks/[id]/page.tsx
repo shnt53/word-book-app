@@ -22,10 +22,15 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
   const [deck, setDeck] = useState<Deck | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // 単語追加・編集モーダル用の状態
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingWord, setEditingWord] = useState<Word | null>(null);
   const [term, setTerm] = useState('');
   const [definition, setDefinition] = useState('');
+
+  // CSVインポートモーダル用の状態
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+  const [csvText, setCsvText] = useState('');
 
   const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
@@ -99,6 +104,43 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
     }
   };
 
+  // CSVインポート送信処理（カンマまたはタブ区切りのテキストを一括登録）
+  const handleImportCsv = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!csvText.trim()) return;
+
+    const lines = csvText.split('\n');
+    let successCount = 0;
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      // カンマまたはタブで分割
+      const parts = line.includes('\t') ? line.split('\t') : line.split(',');
+      if (parts.length >= 2) {
+        const termVal = parts[0].trim();
+        const defVal = parts.slice(1).join(',').trim(); // 定義にカンマが含まれる場合に対応
+
+        if (termVal && defVal) {
+          try {
+            const res = await fetch(`${API_URL}/decks/${id}/words`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ term: termVal, definition: defVal }),
+            });
+            if (res.ok) successCount++;
+          } catch (err) {
+            console.error(err);
+          }
+        }
+      }
+    }
+
+    alert(`${successCount} 件の単語をインポートしました`);
+    setCsvText('');
+    setIsCsvModalOpen(false);
+    fetchDeck();
+  };
+
   if (loading) return <p className="text-gray-500">読み込み中...</p>;
   if (!deck) return <p className="text-gray-500">単語帳が見つかりません</p>;
 
@@ -110,12 +152,12 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
         </Link>
       </div>
 
-      <div className="flex justify-between items-start mb-6">
+      <div className="flex justify-between items-start mb-6 flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">{deck.title}</h1>
           <p className="text-gray-600 mt-1">{deck.description}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {deck.words.length > 0 && (
             <Link
               href={`/decks/${id}/quiz`}
@@ -124,6 +166,12 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
               クイズを始める
             </Link>
           )}
+          <button
+            onClick={() => setIsCsvModalOpen(true)}
+            className="bg-gray-100 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-200 transition font-medium"
+          >
+            CSVインポート
+          </button>
           <button
             onClick={handleOpenAddModal}
             className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition font-medium"
@@ -147,7 +195,7 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
             {deck.words.length === 0 ? (
               <tr>
                 <td colSpan={4} className="p-4 text-center text-gray-500">
-                  単語がまだ登録されていません。「+ 単語を追加」ボタンから追加してください。
+                  単語がまだ登録されていません。「+ 単語を追加」または「CSVインポート」から追加してください。
                 </td>
               </tr>
             ) : (
@@ -187,6 +235,7 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
         </table>
       </div>
 
+      {/* 単語追加・編集モーダル */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-md w-full p-6 text-gray-900">
@@ -228,6 +277,44 @@ export default function DeckDetailPage({ params }: { params: Promise<{ id: strin
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium"
                 >
                   保存
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CSV/テキスト一括インポートモーダル */}
+      {isCsvModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-lg w-full p-6 text-gray-900">
+            <h2 className="text-xl font-bold mb-2 text-gray-900">CSVから一括インポート</h2>
+            <p className="text-xs text-gray-600 mb-4">
+              「単語,定義」または「単語 [タブ] 定義」の形式で1行ずつ入力または貼り付けしてください。
+            </p>
+            <form onSubmit={handleImportCsv} className="space-y-4">
+              <div>
+                <textarea
+                  required
+                  value={csvText}
+                  onChange={(e) => setCsvText(e.target.value)}
+                  className="w-full border rounded-md p-2 h-48 font-mono text-sm text-gray-900 bg-white border-gray-300"
+                  placeholder={`apple,りんご\nbanana,バナナ\norange,みかん`}
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCsvModalOpen(false)}
+                  className="px-4 py-2 border rounded-md hover:bg-gray-100 text-gray-700"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium"
+                >
+                  インポート実行
                 </button>
               </div>
             </form>
