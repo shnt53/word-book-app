@@ -235,3 +235,19 @@ def update_word_status(word_id: str, is_wrong: bool, db: Session = Depends(get_d
     word.is_wrong = is_wrong
     db.commit()
     return {"status": "success"}
+
+@app.delete("/decks/{deck_id}")
+def delete_deck(deck_id: str, db: Session = Depends(get_db)):
+    # 該当する単語帳を取得
+    deck = db.query(models.Deck).filter(models.Deck.id == deck_id).first()
+    if not deck:
+        raise HTTPException(status_code=404, detail="単語帳が見つかりません")
+    
+    # 該当の単語帳に含まれる単語を先に削除
+    db.query(models.Word).filter(models.Word.deck_id == deck_id).delete()
+    
+    # 単語帳を削除
+    db.delete(deck)
+    db.commit()
+    
+    return {"message": "単語帳を削除しました"}
