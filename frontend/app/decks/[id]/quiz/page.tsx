@@ -12,12 +12,13 @@ type QuizQuestion = {
 
 export default function QuizPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [quizzes, setQuizzes] = useState<QuizQuestion[]>([]);
+  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
-  const [stats, setStats] = useState({ correct: 0, wrong: 0 });
+  const [score, setScore] = useState(0);
   const [isFinished, setIsFinished] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
@@ -25,47 +26,44 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
     const fetchQuiz = async () => {
       try {
         const res = await fetch(`${API_URL}/decks/${id}/quiz`);
-        if (res.ok) {
-          const data = await res.json();
-          setQuizzes(data);
+        if (!res.ok) {
+          throw new Error('クイズデータの取得に失敗しました');
         }
-      } catch (err) {
+        const data = await res.json();
+        setQuestions(Array.isArray(data) ? data : []);
+      } catch (err: any) {
         console.error(err);
+        setError(err.message || 'エラーが発生しました');
       } finally {
         setLoading(false);
       }
     };
-    fetchQuiz();
+
+    if (id) {
+      fetchQuiz();
+    }
   }, [id, API_URL]);
 
-  const updateWordStatus = async (wordId: string, status: string) => {
-    try {
-      await fetch(`${API_URL}/words/${wordId}/status?status=${status}`, {
-        method: 'PATCH',
-      });
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleAnswer = (option: string) => {
-    if (selectedOption !== null) return;
+  const handleSelectOption = (option: string) => {
+    if (selectedOption !== null || !questions[currentIndex]) return;
 
     setSelectedOption(option);
-    const currentQuiz = quizzes[currentIndex];
-    const isCorrect = option === currentQuiz.correct_term;
+    const currentQ = questions[currentIndex];
 
-    if (isCorrect) {
-      setStats((prev) => ({ ...prev, correct: prev.correct + 1 }));
-      updateWordStatus(currentQuiz.id, 'remembered');
+    if (option === currentQ.correct_term) {
+      setScore((prev) => prev + 1);
+      fetch(`${API_URL}/words/${currentQ.id}/status?status=remembered`, {
+        method: 'PATCH',
+      }).catch(console.error);
     } else {
-      setStats((prev) => ({ ...prev, wrong: prev.wrong + 1 }));
-      updateWordStatus(currentQuiz.id, 'not_remembered');
+      fetch(`${API_URL}/words/${currentQ.id}/status?status=not_remembered`, {
+        method: 'PATCH',
+      }).catch(console.error);
     }
   };
 
-  const handleNext = () => {
-    if (currentIndex + 1 < quizzes.length) {
+  const handleNextQuestion = () => {
+    if (currentIndex + 1 < questions.length) {
       setCurrentIndex((prev) => prev + 1);
       setSelectedOption(null);
     } else {
@@ -73,41 +71,68 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
     }
   };
 
-  if (loading) return <p className="text-gray-500">読み込み中...</p>;
-  if (quizzes.length === 0)
+  // 1. ローディング表示
+  if (loading) {
     return (
-      <div className="text-center py-10">
-        <p className="text-gray-500 mb-4">クイズを出題するための単語が足りません。（選択肢を作るために複数の単語が必要です）</p>
+      <div className="flex justify-center items-center min-h-[300px]">
+        <p className="text-gray-600 font-medium">クイズを読み込んでいます...</p>
+      </div>
+    );
+  }
+
+  // 2. エラー発生時
+  if (error) {
+    return (
+      <div className="p-6 bg-white rounded-lg border border-red-200 text-center max-w-md mx-auto my-8">
+        <p className="text-red-600 mb-4">{error}</p>
         <Link href={`/decks/${id}`} className="text-blue-600 hover:underline font-medium">
-          ← 単語帳に戻る
+          ← 単語帳詳細に戻る
         </Link>
       </div>
     );
+  }
 
+  // 3. 単語数が不足（クイズ問題が取得できない）している場合
+  if (!questions || questions.length === 0) {
+    return (
+      <div className="p-8 bg-white rounded-lg border border-gray-200 text-center max-w-md mx-auto my-8 text-gray-900">
+        <h2 className="text-xl font-bold mb-2">クイズを開始できません</h2>
+        <p className="text-gray-600 mb-6 text-sm">
+          クイズを作成するには、単語帳に最低2つ以上の単語が必要です。
+        </p>
+        <Link
+          href={`/decks/${id}`}
+          className="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium"
+        >
+          ← 単語帳に戻って単語を追加する
+        </Link>
+      </div>
+    );
+  }
+
+  // 4. クイズ終了時
   if (isFinished) {
     return (
-      <div className="max-w-md mx-auto bg-white p-8 rounded-lg border border-gray-200 text-center text-gray-900">
-        <h1 className="text-2xl font-bold mb-4 text-gray-900">クイズ完了！</h1>
-        <div className="space-y-2 mb-6">
-          <p className="text-lg text-gray-800">解いた問題数: {quizzes.length}</p>
-          <p className="text-green-600 font-bold text-xl">正解: {stats.correct}</p>
-          <p className="text-red-600 font-bold text-xl">不正解: {stats.wrong}</p>
-        </div>
-        <div className="flex gap-4 justify-center">
+      <div className="p-8 bg-white rounded-lg border border-gray-200 text-center max-w-md mx-auto my-8 text-gray-900">
+        <h2 className="text-2xl font-bold mb-4 text-gray-900">クイズ完了！</h2>
+        <p className="text-lg mb-6 text-gray-700">
+          スコア: <span className="font-bold text-blue-600">{score}</span> / {questions.length} 問正解
+        </p>
+        <div className="flex justify-center gap-4">
           <button
             onClick={() => {
               setCurrentIndex(0);
               setSelectedOption(null);
-              setStats({ correct: 0, wrong: 0 });
+              setScore(0);
               setIsFinished(false);
             }}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition font-medium"
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium"
           >
-            もう一度解く
+            もう一度挑戦
           </button>
           <Link
             href={`/decks/${id}`}
-            className="border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-100 transition font-medium text-gray-700"
+            className="bg-gray-100 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-200 font-medium"
           >
             単語帳に戻る
           </Link>
@@ -116,80 +141,68 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
     );
   }
 
-  const quiz = quizzes[currentIndex];
+  // 5. 通常の問題表示処理（安全に問題を取得）
+  const currentQ = questions[currentIndex];
 
   return (
-    <div className="max-w-2xl mx-auto text-gray-900">
-      <div className="flex justify-between items-center mb-6">
+    <div className="max-w-xl mx-auto my-6">
+      <div className="mb-4 flex justify-between items-center">
         <Link href={`/decks/${id}`} className="text-blue-600 hover:underline text-sm font-medium">
-          ← 終了して戻る
+          ← 中断して単語帳に戻る
         </Link>
-        <span className="text-sm font-semibold text-gray-600">
-          {currentIndex + 1} / {quizzes.length} 問目
+        <span className="text-sm font-medium text-gray-600">
+          問題 {currentIndex + 1} / {questions.length}
         </span>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 mb-6 text-center">
-        <div className="bg-white p-3 rounded-lg border border-gray-200">
-          <p className="text-xs text-gray-500">解いた問題数</p>
-          <p className="text-lg font-bold text-gray-800">{currentIndex}</p>
+      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm text-gray-900">
+        <div className="mb-6">
+          <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 block mb-1">
+            定義・意味
+          </span>
+          <p className="text-lg font-medium text-gray-900 whitespace-pre-wrap">
+            {currentQ?.definition}
+          </p>
         </div>
-        <div className="bg-white p-3 rounded-lg border border-gray-200">
-          <p className="text-xs text-green-600 font-semibold">正解</p>
-          <p className="text-lg font-bold text-green-600">{stats.correct}</p>
-        </div>
-        <div className="bg-white p-3 rounded-lg border border-gray-200">
-          <p className="text-xs text-red-600 font-semibold">不正解</p>
-          <p className="text-lg font-bold text-red-600">{stats.wrong}</p>
-        </div>
-      </div>
 
-      <div className="bg-white p-6 rounded-lg border border-gray-200 mb-6">
-        <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">
-          問題（定義）
-        </span>
-        <p className="text-lg font-bold text-gray-900 mt-3 whitespace-pre-wrap">
-          {quiz.definition}
-        </p>
-      </div>
+        <div className="space-y-3 mb-6">
+          {currentQ?.options?.map((option, idx) => {
+            let buttonStyle = 'border-gray-300 text-gray-800 hover:bg-gray-50';
 
-      <div className="grid grid-cols-1 gap-3 mb-6">
-        {quiz.options.map((option, index) => {
-          let buttonStyle = 'bg-white border-gray-200 hover:bg-gray-50 text-gray-900 font-medium';
-
-          if (selectedOption !== null) {
-            if (option === quiz.correct_term) {
-              buttonStyle = 'bg-green-100 border-green-500 text-green-900 font-bold';
-            } else if (selectedOption === option) {
-              buttonStyle = 'bg-red-100 border-red-500 text-red-900 font-bold';
-            } else {
-              buttonStyle = 'bg-white border-gray-200 opacity-50 text-gray-900';
+            if (selectedOption !== null) {
+              if (option === currentQ.correct_term) {
+                buttonStyle = 'bg-green-100 border-green-500 text-green-900 font-bold';
+              } else if (option === selectedOption) {
+                buttonStyle = 'bg-red-100 border-red-500 text-red-900';
+              } else {
+                buttonStyle = 'border-gray-200 text-gray-400 opacity-60';
+              }
             }
-          }
 
-          return (
-            <button
-              key={index}
-              onClick={() => handleAnswer(option)}
-              disabled={selectedOption !== null}
-              className={`p-4 border rounded-lg text-left transition ${buttonStyle}`}
-            >
-              {option}
-            </button>
-          );
-        })}
-      </div>
-
-      {selectedOption !== null && (
-        <div className="flex justify-end">
-          <button
-            onClick={handleNext}
-            className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition font-bold"
-          >
-            {currentIndex + 1 < quizzes.length ? '次の問題へ →' : '結果を見る'}
-          </button>
+            return (
+              <button
+                key={idx}
+                onClick={() => handleSelectOption(option)}
+                disabled={selectedOption !== null}
+                className={`w-full text-left p-4 rounded-lg border transition text-base ${buttonStyle}`}
+              >
+                {option}
+              </button>
+            );
+          })}
         </div>
-      )}
+
+        {selectedOption !== null && (
+          <div className="flex justify-end pt-2 border-t border-gray-100">
+            <button
+              onClick={handleNextQuestion}
+              className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 font-medium"
+            >
+              {currentIndex + 1 < questions.length ? '次の問題へ' : '結果を見る'}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
