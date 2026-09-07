@@ -25,15 +25,27 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
   useEffect(() => {
     const fetchQuiz = async () => {
       try {
-        const res = await fetch(`${API_URL}/decks/${id}/quiz`);
+        setLoading(true);
+        setError(null);
+        
+        const res = await fetch(`${API_URL}/decks/${id}/quiz`, {
+          cache: 'no-store'
+        });
+        
         if (!res.ok) {
-          throw new Error('クイズデータの取得に失敗しました');
+          throw new Error(`クイズデータの取得に失敗しました (Status: ${res.status})`);
         }
+        
         const data = await res.json();
-        setQuestions(Array.isArray(data) ? data : []);
+        
+        if (Array.isArray(data)) {
+          setQuestions(data);
+        } else {
+          setQuestions([]);
+        }
       } catch (err: any) {
-        console.error(err);
-        setError(err.message || 'エラーが発生しました');
+        console.error('Quiz Fetch Error:', err);
+        setError(err.message || 'クイズの取得中にエラーが発生しました');
       } finally {
         setLoading(false);
       }
@@ -50,16 +62,17 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
     setSelectedOption(option);
     const currentQ = questions[currentIndex];
 
-    if (option === currentQ.correct_term) {
+    const isCorrect = option === currentQ.correct_term;
+    const nextStatus = isCorrect ? 'remembered' : 'not_remembered';
+
+    if (isCorrect) {
       setScore((prev) => prev + 1);
-      fetch(`${API_URL}/words/${currentQ.id}/status?status=remembered`, {
-        method: 'PATCH',
-      }).catch(console.error);
-    } else {
-      fetch(`${API_URL}/words/${currentQ.id}/status?status=not_remembered`, {
-        method: 'PATCH',
-      }).catch(console.error);
     }
+
+    // ステータス更新処理 (クエリパラメータ形式)
+    fetch(`${API_URL}/words/${currentQ.id}/status?status=${nextStatus}`, {
+      method: 'PATCH',
+    }).catch((err) => console.error('Status update failed:', err));
   };
 
   const handleNextQuestion = () => {
@@ -71,11 +84,11 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
     }
   };
 
-  // 1. ローディング表示
+  // 1. ローディング状態
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-[300px]">
-        <p className="text-gray-600 font-medium">クイズを読み込んでいます...</p>
+        <p className="text-gray-600 font-medium">クイズを生成中...</p>
       </div>
     );
   }
@@ -84,7 +97,7 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
   if (error) {
     return (
       <div className="p-6 bg-white rounded-lg border border-red-200 text-center max-w-md mx-auto my-8">
-        <p className="text-red-600 mb-4">{error}</p>
+        <p className="text-red-600 mb-4 font-medium">{error}</p>
         <Link href={`/decks/${id}`} className="text-blue-600 hover:underline font-medium">
           ← 単語帳詳細に戻る
         </Link>
@@ -92,11 +105,11 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
     );
   }
 
-  // 3. 単語数が不足（クイズ問題が取得できない）している場合
+  // 3. クイズ問題が存在しない／2つ未満の場合
   if (!questions || questions.length === 0) {
     return (
       <div className="p-8 bg-white rounded-lg border border-gray-200 text-center max-w-md mx-auto my-8 text-gray-900">
-        <h2 className="text-xl font-bold mb-2">クイズを開始できません</h2>
+        <h2 className="text-xl font-bold mb-2 text-gray-900">クイズを開始できません</h2>
         <p className="text-gray-600 mb-6 text-sm">
           クイズを作成するには、単語帳に最低2つ以上の単語が必要です。
         </p>
@@ -104,7 +117,7 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
           href={`/decks/${id}`}
           className="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium"
         >
-          ← 単語帳に戻って単語を追加する
+          ← 単語帳に戻る
         </Link>
       </div>
     );
@@ -141,7 +154,7 @@ export default function QuizPage({ params }: { params: Promise<{ id: string }> }
     );
   }
 
-  // 5. 通常の問題表示処理（安全に問題を取得）
+  // 5. 通常の問題表示
   const currentQ = questions[currentIndex];
 
   return (
