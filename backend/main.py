@@ -251,11 +251,17 @@ def get_quiz_questions(deck_id: str, only_wrong: bool = False, db: Session = Dep
         options = [target.term] + [d.term for d in dummies]
         random.shuffle(options)
 
+        # ホバー表示用：選択肢となる各単語とその定義の対応マップを生成
+        option_definitions = {target.term: target.definition}
+        for d in dummies:
+            option_definitions[d.term] = d.definition
+
         quiz_list.append({
             "id": target.id,
             "definition": target.definition,
             "correct_term": target.term,
             "options": options,
+            "option_definitions": option_definitions,
         })
 
     random.shuffle(quiz_list)
